@@ -2,105 +2,109 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type MeterState = "idle" | "ok" | "near" | "over";
-
-const steps = [
-  ["Escolha um local aberto", "Piso plano, sem paredes ou veículos a menos de 3 m. Evite vento e ruído de fundo."],
-  ["Aqueça o motor", "Deixe o veículo em temperatura normal de funcionamento, em ponto morto e com freio acionado."],
-  ["Posicione o celular", "A 50 cm da saída do escapamento, na mesma altura e a 45°, sem ficar na frente dos gases."],
-  ["Acelere na rotação correta", "Use ¾ da rotação de potência máxima. Em casos específicos, consulte o manual e a NBR 9714."],
-  ["Meça três vezes", "Mantenha a rotação estável por alguns segundos. Use o maior resultado e compare com o limite."],
+const instructions = [
+  { kicker: "Antes de começar", title: "Vamos verificar seu escapamento", text: "O teste leva cerca de 2 minutos. Você vai precisar do carro ligado, do celular e de um local aberto e silencioso.", icon: "2 min" },
+  { kicker: "Segurança", title: "Vá para um local aberto", text: "Nunca faça o teste em garagem fechada. Estacione em piso plano, coloque o câmbio em ponto morto e acione o freio de estacionamento.", icon: "AR LIVRE" },
+  { kicker: "Distância", title: "Afaste-se de obstáculos", text: "Deixe pelo menos 3 metros entre o escapamento e paredes, muros, carros ou outros objetos que possam refletir o som.", icon: "3 m" },
+  { kicker: "Posição do celular", title: "Fique a 50 cm do escapamento", text: "Segure o celular na mesma altura da saída, formando um ângulo de 45°. Não fique diretamente na frente dos gases.", icon: "50 cm · 45°" },
+  { kicker: "Preparação do motor", title: "Aqueça e estabilize o motor", text: "Espere o motor chegar à temperatura normal. Durante a medição, use ¾ da rotação de potência máxima indicada no manual.", icon: "¾ RPM" },
 ];
 
 export default function Home() {
-  const [running, setRunning] = useState(false);
-  const [db, setDb] = useState(0);
-  const [peak, setPeak] = useState(0);
+  const [step, setStep] = useState(0);
   const [limit, setLimit] = useState(95);
   const [preset, setPreset] = useState("passeio");
   const [offset, setOffset] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [db, setDb] = useState(0);
+  const [peak, setPeak] = useState(0);
   const [error, setError] = useState("");
   const audioRef = useRef<{ctx: AudioContext; stream: MediaStream; raf: number} | null>(null);
+  const total = 8;
 
-  const status: MeterState = !running && peak === 0 ? "idle" : db > limit ? "over" : db > limit - 3 ? "near" : "ok";
-  const label = status === "over" ? "Acima do limite" : status === "near" ? "Atenção: perto do limite" : status === "ok" ? "Dentro do limite" : "Pronto para medir";
-
-  function choosePreset(value: string) {
-    setPreset(value);
-    if (value === "passeio") setLimit(95);
-    if (value === "traseiro") setLimit(103);
-    if (value === "moto") setLimit(99);
-  }
+  const stopAudio = () => {
+    const audio = audioRef.current;
+    if (audio) { cancelAnimationFrame(audio.raf); audio.stream.getTracks().forEach(t => t.stop()); void audio.ctx.close(); }
+    audioRef.current = null;
+    setRunning(false);
+  };
 
   async function startMeter() {
     try {
-      setError(""); setPeak(0);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      setError(""); setPeak(0); setDb(0);
+      const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
       const ctx = new AudioContext();
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048; analyser.smoothingTimeConstant = .72;
-      source.connect(analyser);
+      analyser.fftSize = 2048; analyser.smoothingTimeConstant = .72; source.connect(analyser);
       const data = new Float32Array(analyser.fftSize);
       const tick = () => {
         analyser.getFloatTimeDomainData(data);
-        let sum = 0; for (const sample of data) sum += sample * sample;
-        const rms = Math.sqrt(sum / data.length);
-        const next = Math.max(35, Math.min(125, 100 + offset + 20 * Math.log10(Math.max(rms, .00001))));
-        setDb(Number(next.toFixed(1))); setPeak(p => Math.max(p, Number(next.toFixed(1))));
-        if (audioRef.current) audioRef.current.raf = requestAnimationFrame(tick);
+        let sum=0; for(const sample of data) sum += sample*sample;
+        const rms=Math.sqrt(sum/data.length);
+        const next=Math.max(35,Math.min(125,100+offset+20*Math.log10(Math.max(rms,.00001))));
+        const value=Number(next.toFixed(1)); setDb(value); setPeak(p=>Math.max(p,value));
+        if(audioRef.current) audioRef.current.raf=requestAnimationFrame(tick);
       };
-      audioRef.current = { ctx, stream, raf: requestAnimationFrame(tick) };
-      setRunning(true);
-    } catch {
-      setError("Não foi possível acessar o microfone. Abra o site em HTTPS e permita o uso do microfone.");
-    }
+      audioRef.current={ctx,stream,raf:requestAnimationFrame(tick)}; setRunning(true);
+    } catch { setError("Permita o acesso ao microfone para continuar."); }
   }
 
-  function stopMeter() {
-    const audio = audioRef.current;
-    if (audio) { cancelAnimationFrame(audio.raf); audio.stream.getTracks().forEach(t => t.stop()); audio.ctx.close(); }
-    audioRef.current = null; setRunning(false); setDb(peak);
-  }
+  function finishTest(){ stopAudio(); setDb(peak); setStep(7); }
+  function restart(){ stopAudio(); setStep(0); setDb(0); setPeak(0); setError(""); }
+  function next(){ setStep(s=>Math.min(total-1,s+1)); }
+  function back(){ if(step===6 && running) stopAudio(); setStep(s=>Math.max(0,s-1)); }
+  function selectPreset(value:string){ setPreset(value); if(value==="passeio")setLimit(95); if(value==="traseiro")setLimit(103); if(value==="moto")setLimit(99); }
+  useEffect(()=>()=>stopAudio(),[]);
 
-  useEffect(() => () => { if (audioRef.current) { cancelAnimationFrame(audioRef.current.raf); audioRef.current.stream.getTracks().forEach(t => t.stop()); } }, []);
+  const result = peak > limit ? "over" : peak > limit-3 ? "near" : "ok";
+  const resultTitle = result==="over" ? "Acima da referência" : result==="near" ? "Muito perto do limite" : "Dentro da referência";
 
-  return (
-    <main>
-      <header className="nav"><a className="brand" href="#top"><img src="./logo.png" alt="" /><span>EscapaLegal</span></a><a className="navLink" href="#como-testar">Como testar</a></header>
-      <section className="hero" id="top">
-        <div className="eyebrow">TRIAGEM SONORA PELO CELULAR</div>
-        <h1>Seu escapamento<br/><em>fala dentro da lei?</em></h1>
-        <p className="lead">Faça uma verificação orientativa em poucos minutos. O EscapaLegal guia o posicionamento, mede o som e compara com a referência selecionada.</p>
-        <a className="primary" href="#medidor">Iniciar verificação <span>↘</span></a>
-        <div className="heroArt"><img src="./logo.png" alt="Símbolo do EscapaLegal"/><span className="ring r1"/><span className="ring r2"/></div>
-      </section>
+  return <main className="wizard">
+    <header><button className="logo" onClick={restart}><img src="./logo.png" alt=""/><span>EscapaLegal</span></button><span className="counter">{step+1} de {total}</span></header>
+    <div className="progress"><span style={{width:`${((step+1)/total)*100}%`}}/></div>
 
-      <section className="meterSection" id="medidor">
-        <div className="sectionHead"><span>01 — MEDIDOR</span><h2>Ouça. Meça.<br/>Compare.</h2><p>Escolha a referência antes de começar. O resultado muda de cor conforme a proximidade do limite.</p></div>
-        <div className={`meterCard ${status}`}>
-          <div className="meterTop"><span>LEITURA AO VIVO</span><span className="live"><i/> {running ? "MIC ATIVO" : "MIC DESLIGADO"}</span></div>
-          <div className="readout"><strong>{db ? db.toFixed(1) : "—"}</strong><span>dB(A)*</span></div>
-          <div className="status"><i/>{label}</div>
-          <div className="scale"><span style={{width: `${Math.min(100, Math.max(0, (db - 35) / 90 * 100))}%`}}/><b style={{left:`${(limit-35)/90*100}%`}}/></div>
-          <div className="scaleLabels"><span>35</span><span>Limite {limit}</span><span>125</span></div>
-          <button className="measureBtn" onClick={running ? stopMeter : startMeter}>{running ? "Parar e salvar pico" : "Permitir microfone e medir"}</button>
-          {peak > 0 && <p className="peak">Maior leitura: <strong>{peak.toFixed(1)} dB(A)*</strong></p>}
-          {error && <p className="error">{error}</p>}
+    <section className="screen" aria-live="polite">
+      {step <= 4 && <div className="instruction">
+        <div className="visual"><span>{instructions[step].icon}</span></div>
+        <p className="kicker">{instructions[step].kicker}</p>
+        <h1>{instructions[step].title}</h1>
+        <p className="copy">{instructions[step].text}</p>
+        {step===3 && <div className="diagram"><i className="phone">CELULAR</i><span>50 cm</span><i className="pipe">ESCAPAMENTO</i></div>}
+      </div>}
+
+      {step===5 && <div className="formStep">
+        <p className="kicker">Referência</p><h1>Qual é o seu veículo?</h1><p className="copy">Isso define o valor usado na comparação.</p>
+        <div className="choices">
+          <button className={preset==="passeio"?"selected":""} onClick={()=>selectPreset("passeio")}><b>Carro de passeio</b><span>Motor dianteiro · 95 dB(A)</span></button>
+          <button className={preset==="traseiro"?"selected":""} onClick={()=>selectPreset("traseiro")}><b>Carro de passeio</b><span>Motor traseiro · 103 dB(A)</span></button>
+          <button className={preset==="moto"?"selected":""} onClick={()=>selectPreset("moto")}><b>Motocicleta</b><span>Referência geral · 99 dB(A)</span></button>
+          <button className={preset==="manual"?"selected":""} onClick={()=>setPreset("manual")}><b>Tenho o valor do manual</b><span>Usar limite específico + 3 dB(A)</span></button>
         </div>
+        {preset==="manual" && <label className="manual">Limite final em dB(A)<input type="number" min="70" max="120" value={limit} onChange={e=>setLimit(Number(e.target.value))}/></label>}
+        <details><summary>Calibrar o celular</summary><label>Ajuste: {offset>0?"+":""}{offset} dB<input type="range" min="-20" max="20" value={offset} onChange={e=>setOffset(Number(e.target.value))}/></label></details>
+      </div>}
 
-        <div className="settings">
-          <label>Referência do veículo<select value={preset} onChange={e=>choosePreset(e.target.value)}><option value="passeio">Carro de passeio, motor dianteiro — 95 dB(A)</option><option value="traseiro">Carro de passeio, motor traseiro — 103 dB(A)</option><option value="moto">Motocicleta / similar — 99 dB(A)</option><option value="manual">Valor informado no manual / fabricante</option></select></label>
-          {preset === "manual" && <label>Limite do fabricante + 3 dB(A)<input type="number" min="70" max="120" value={limit} onChange={e=>setLimit(Number(e.target.value))}/></label>}
-          <label>Calibração do celular <span>{offset > 0 ? "+" : ""}{offset} dB</span><input type="range" min="-20" max="20" value={offset} onChange={e=>setOffset(Number(e.target.value))}/></label>
-          <p>* Microfones de celulares não são decibelímetros calibrados e podem aplicar ganho automático. Calibre ao lado de um aparelho confiável para melhorar a estimativa.</p>
-        </div>
-      </section>
+      {step===6 && <div className="testStep">
+        <p className="kicker">Medição</p><h1>{running ? "Mantenha a rotação" : "Tudo pronto para medir"}</h1>
+        <p className="copy">Faça 3 medições. Mantenha o celular na posição indicada e toque no botão abaixo.</p>
+        <div className={`gauge ${db>limit?"over":db>limit-3?"near":"ok"}`}><strong>{db?db.toFixed(1):"—"}</strong><span>dB(A)*</span><small>Limite: {limit} dB(A)</small></div>
+        {!running ? <button className="start" onClick={startMeter}>Ativar microfone</button> : <button className="stop" onClick={finishTest}>Finalizar medição</button>}
+        {running && <div className="listening"><i/> Ouvindo… maior leitura: {peak.toFixed(1)} dB(A)</div>}
+        {error && <p className="error">{error}</p>}
+      </div>}
 
-      <section className="steps" id="como-testar"><div className="sectionHead light"><span>02 — PROCEDIMENTO</span><h2>Teste do jeito certo.</h2><p>Segurança primeiro: faça o procedimento ao ar livre, nunca em garagem fechada.</p></div><div className="stepList">{steps.map((s,i)=><article key={s[0]}><b>{String(i+1).padStart(2,"0")}</b><div><h3>{s[0]}</h3><p>{s[1]}</p></div></article>)}</div></section>
+      {step===7 && <div className={`result ${result}`}>
+        <div className="resultIcon">{result==="ok"?"✓":result==="near"?"!":"×"}</div><p className="kicker">Resultado orientativo</p><h1>{resultTitle}</h1>
+        <div className="resultNumbers"><strong>{peak.toFixed(1)}</strong><span>dB(A)*</span><small>Referência selecionada: {limit} dB(A)</small></div>
+        <p className="copy">{result==="over"?"Evite circular antes de verificar o escapamento com um profissional e equipamento calibrado.":result==="near"?"Repita o teste em um local mais silencioso e considere uma avaliação profissional.":"A leitura estimada ficou abaixo da referência selecionada."}</p>
+        <div className="notice">* O celular fornece apenas uma estimativa. Este resultado não é laudo e não substitui fiscalização ou inspeção com equipamento calibrado.</div>
+        <button className="again" onClick={restart}>Fazer novo teste</button>
+      </div>}
+    </section>
 
-      <section className="law"><div><span>03 — REFERÊNCIA LEGAL</span><h2>O número certo depende do veículo.</h2></div><div className="lawText"><p>Quando existe valor de ruído parado declarado pelo fabricante, a fiscalização usa esse valor acrescido de <strong>3 dB(A)</strong>. Na falta dele, a Resolução CONAMA 418/2009 traz referências por categoria — 95 dB(A) para automóvel de passeio com motor dianteiro.</p><p>Uma medição oficial segue a ABNT NBR 9714 e usa equipamento calibrado pelo INMETRO/RBC. Este app é uma triagem educativa e não emite laudo.</p><div className="links"><a href="https://www.ibama.gov.br/sophia/cnia/legislacao/CONAMA/RE0418-251109.PDF" target="_blank" rel="noreferrer">Resolução CONAMA 418/2009 ↗</a><a href="https://www.gov.br/participamaisbrasil/consolidacao-das-normas-sobre-a-fiscalizacao-pelas-autoridades-de-transito" target="_blank" rel="noreferrer">Normas de fiscalização ↗</a></div></div></section>
-      <footer><div className="brand"><img src="./logo.png" alt=""/><span>EscapaLegal</span></div><p>Meça com consciência. Dirija com respeito.</p><small>Ferramenta educativa — não substitui inspeção oficial.</small></footer>
-    </main>
-  );
+    {step<6 && <nav className="actions">{step>0?<button className="back" onClick={back}>Voltar</button>:<span/>}<button className="next" onClick={next}>{step===0?"Começar":"Próximo"} <span>→</span></button></nav>}
+    {step===6 && <button className="floatingBack" onClick={back}>← Voltar</button>}
+    <footer>Ferramenta educativa · Resolução CONAMA 418/2009</footer>
+  </main>;
 }
